@@ -2,6 +2,7 @@
 
 (function init() {
   console.log('DubFusion: Content script loaded on', window.location.href);
+  console.log('DubFusion: Starting initialization...');
   
   // Wait for the YouTube player container
   const TRY_MS = 50; // Increased delay
@@ -11,10 +12,35 @@
   let captionSniffer;
   let debugUI;
   let dfSettings = { stylePrompt: "", mix: 70, glossary: [] };
+  let rewriteEnabled = false;
+  let rewrittenChunks = []; // Store last 5 rewritten chunks
 
   async function loadSettings() {
     const { dfSettings: s } = await chrome.storage.sync.get('dfSettings');
     dfSettings = s || dfSettings;
+  }
+
+  // --- Rewrite Handler ---
+  function onRawChunk(chunk) {
+    if (!rewriteEnabled) return;
+    
+    // Create rewritten chunk object
+    const rewrittenChunk = {
+      videoTimeStartSec: chunk.startSec,
+      videoTimeEndSec: chunk.endSec,
+      sourceText: chunk.text,
+      rewrittenText: `[Hinglish TBD] ${chunk.text}`,
+      styleSnapshot: {
+        mix: dfSettings.mix,
+        glossaryTerms: (dfSettings.glossary || []).slice(0, 3)
+      }
+    };
+    
+    // Add to history and keep only last 5
+    rewrittenChunks.push(rewrittenChunk);
+    rewrittenChunks = rewrittenChunks.slice(-5);
+    
+    console.log('DubFusion: Rewritten chunk:', rewrittenChunk);
   }
 
   // --- Debug overlay ---
@@ -41,6 +67,45 @@
     debugUI.textContent = all.join('\n');
   }
 
+  function updateDebugOverlay() {
+    ensureDebugUI();
+    const header = `DubFusion • Mix:${dfSettings.mix}%`;
+    const lines = [];
+    
+    // Add RAW section
+    if (captionSniffer && captionSniffer.history.length > 0) {
+      lines.push('RAW');
+      lines.push(...captionSniffer.history);
+    }
+    
+    // Add RW section
+    if (rewriteEnabled) {
+      if (captionSniffer && captionSniffer.timer) {
+        // Captions are running, show rewritten chunks
+        if (rewrittenChunks.length > 0) {
+          lines.push('RW');
+          rewrittenChunks.forEach(chunk => {
+            const startTime = formatTime(chunk.videoTimeStartSec);
+            const endTime = formatTime(chunk.videoTimeEndSec);
+            lines.push(`[${startTime} → ${endTime}] ${chunk.rewrittenText}`);
+          });
+        }
+      } else {
+        // Rewrite is ON but captions are OFF
+        lines.push('Rewrite: waiting for captions…');
+      }
+    }
+    
+    const all = [header, ...lines];
+    debugUI.textContent = all.join('\n');
+  }
+
+  function formatTime(sec) {
+    const s = Math.max(0, sec|0);
+    const m = (s/60)|0; const r = s%60;
+    return `${m}:${String(r).padStart(2,'0')}`;
+  }
+
   // --- Caption Sniffer ---
   class CaptionSniffer {
     constructor(videoEl) {
@@ -53,12 +118,12 @@
     start() {
       if (this.timer) return;
       this.timer = setInterval(() => this.tick(), 100);
-      setDebugLines(['DubFusion: captions ▶ (waiting for text)']);
+      updateDebugOverlay();
     }
     stop() {
       clearInterval(this.timer); this.timer = null;
       this.flushCurrent();
-      setDebugLines(['DubFusion: captions ⏸']);
+      updateDebugOverlay();
     }
     getVisibleCaptionText() {
       // Collect visible caption segments from the player
@@ -72,7 +137,15 @@
         const line = `[${this.format(this.current.start)} → ${this.format(end)}] ${this.current.text}`;
         this.history.push(line);
         this.history = this.history.slice(-5);
-        setDebugLines(this.history);
+        
+        // Publish to rewrite handler
+        onRawChunk({
+          startSec: this.current.start,
+          endSec: end,
+          text: this.current.text
+        });
+        
+        updateDebugOverlay();
         this.current = null;
       }
     }
@@ -124,6 +197,7 @@
   }
 
   function findInjectionPoint() {
+    console.log('DubFusion: findInjectionPoint called');
     // Try to find a good injection point
     const possibleHosts = [
       document.querySelector('#above-the-fold ytd-watch-metadata'),
@@ -137,6 +211,7 @@
       document.querySelector('#description')
     ].filter(Boolean);
 
+    console.log('DubFusion: Possible hosts found:', possibleHosts.length);
     if (possibleHosts.length > 0) {
       const host = possibleHosts[0];
       console.log('DubFusion: Using injection host:', host.tagName, host.id || host.className);
@@ -157,12 +232,14 @@
   }
 
   function injectUI() {
+    console.log('DubFusion: injectUI called');
     if (document.getElementById('dubfusion-hello')) {
       console.log('DubFusion: UI already injected, skipping');
       return; // idempotent
     }
 
     const host = findInjectionPoint();
+    console.log('DubFusion: Injection host found:', host);
     if (!host) {
       if (tries++ < MAX_TRIES) {
         if (tries % 50 === 0) { // Log every 50th attempt to avoid spam
@@ -239,6 +316,33 @@
       }
     });
 
+    const rewriteBtn = document.createElement('button');
+    rewriteBtn.textContent = '✍ Rewrite (stub)';
+    rewriteBtn.style.cssText = `
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      font-size: 14px;
+      background: #6f42c1;
+      color: white;
+      font-weight: bold;
+    `;
+    rewriteBtn.title = 'Toggle local rewrite stub';
+    rewriteBtn.addEventListener('click', () => {
+      rewriteEnabled = !rewriteEnabled;
+      if (rewriteEnabled) {
+        rewriteBtn.textContent = '⏸ Rewrite';
+        rewriteBtn.style.background = '#dc3545';
+        console.log('DubFusion: Rewrite enabled');
+      } else {
+        rewriteBtn.textContent = '✍ Rewrite (stub)';
+        rewriteBtn.style.background = '#6f42c1';
+        console.log('DubFusion: Rewrite disabled');
+      }
+      updateDebugOverlay();
+    });
+
     const settingsLink = document.createElement('a');
     settingsLink.textContent = '⚙ Settings';
     settingsLink.href = '#';
@@ -280,6 +384,7 @@
 
     wrapper.appendChild(btn);
     wrapper.appendChild(capBtn);
+    wrapper.appendChild(rewriteBtn);
     wrapper.appendChild(settingsLink);
     wrapper.appendChild(status);
     
@@ -384,13 +489,46 @@
       }
     });
 
+    // Add rewrite button for fallback UI
+    const rewriteBtn = document.createElement('div');
+    rewriteBtn.id = 'dubfusion-rewrite';
+    rewriteBtn.style.cssText = `
+      position: fixed;
+      top: 220px;
+      right: 20px;
+      z-index: 10000;
+      background: #6f42c1;
+      color: white;
+      padding: 12px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-size: 14px;
+    `;
+    rewriteBtn.textContent = '✍ Rewrite (stub)';
+    rewriteBtn.title = 'Toggle local rewrite stub';
+    rewriteBtn.addEventListener('click', () => {
+      rewriteEnabled = !rewriteEnabled;
+      if (rewriteEnabled) {
+        rewriteBtn.textContent = '⏸ Rewrite';
+        rewriteBtn.style.background = '#dc3545';
+        console.log('DubFusion: Rewrite enabled');
+      } else {
+        rewriteBtn.textContent = '✍ Rewrite (stub)';
+        rewriteBtn.style.background = '#6f42c1';
+        console.log('DubFusion: Rewrite disabled');
+      }
+      updateDebugOverlay();
+    });
+
     // Add settings link for fallback UI
     const settingsLink = document.createElement('a');
     settingsLink.textContent = '⚙ Settings';
     settingsLink.href = '#';
     settingsLink.style.cssText = `
       position: fixed;
-      top: 200px;
+      top: 260px;
       right: 20px;
       z-index: 10000;
       font-size: 12px;
@@ -409,6 +547,7 @@
 
     document.body.appendChild(floatingBtn);
     document.body.appendChild(capBtn);
+    document.body.appendChild(rewriteBtn);
     document.body.appendChild(settingsLink);
     console.log('DubFusion: Floating UI injected successfully');
   }
