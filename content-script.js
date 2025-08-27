@@ -14,6 +14,7 @@
   let dfSettings = { stylePrompt: "", mix: 70, glossary: [] };
   let rewriteEnabled = false;
   let rewrittenChunks = []; // Store last 5 rewritten chunks
+  let ttsProbeStatus = ''; // Track TTS probe status
 
   async function loadSettings() {
     const { dfSettings: s } = await chrome.storage.sync.get('dfSettings');
@@ -99,6 +100,9 @@
     }
     
     const all = [header, ...lines];
+    if (ttsProbeStatus) {
+      all.push(ttsProbeStatus);
+    }
     debugUI.textContent = all.join('\n');
   }
 
@@ -345,6 +349,57 @@
       updateDebugOverlay();
     });
 
+    const ttsBtn = document.createElement('button');
+    ttsBtn.textContent = '🔊 Test TTS';
+    ttsBtn.style.cssText = `
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      font-size: 14px;
+      background: #17a2b8;
+      color: white;
+      font-weight: bold;
+    `;
+    ttsBtn.title = 'Test TTS provider with sample audio';
+    ttsBtn.addEventListener('click', async () => {
+      console.log('DubFusion: TTS probe requested');
+      ttsProbeStatus = `TTS probe… (${dfSettings.ttsProvider || 'None'})`;
+      updateDebugOverlay();
+      
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'DF_TTS_PROBE_REQUEST' });
+        if (response.success) {
+          console.log('DubFusion: TTS probe successful');
+          ttsProbeStatus = 'TTS probe: playing ✓';
+          updateDebugOverlay();
+          // Clear status after a few seconds
+          setTimeout(() => {
+            ttsProbeStatus = '';
+            updateDebugOverlay();
+          }, 3000);
+        } else {
+          console.warn('DubFusion: TTS probe failed:', response.error);
+          ttsProbeStatus = `TTS probe failed: ${response.error}`;
+          updateDebugOverlay();
+          // Clear status after a few seconds
+          setTimeout(() => {
+            ttsProbeStatus = '';
+            updateDebugOverlay();
+          }, 5000);
+        }
+      } catch (e) {
+        console.error('DubFusion: TTS probe error:', e);
+        ttsProbeStatus = 'TTS probe failed: network error';
+        updateDebugOverlay();
+        // Clear status after a few seconds
+        setTimeout(() => {
+          ttsProbeStatus = '';
+          updateDebugOverlay();
+        }, 5000);
+      }
+    });
+
     const settingsLink = document.createElement('a');
     settingsLink.textContent = '⚙ Settings';
     settingsLink.href = '#';
@@ -387,6 +442,7 @@
     wrapper.appendChild(btn);
     wrapper.appendChild(capBtn);
     wrapper.appendChild(rewriteBtn);
+    wrapper.appendChild(ttsBtn);
     wrapper.appendChild(settingsLink);
     wrapper.appendChild(status);
     
@@ -524,13 +580,70 @@
       updateDebugOverlay();
     });
 
+    // Add TTS button for fallback UI
+    const ttsBtn = document.createElement('div');
+    ttsBtn.id = 'dubfusion-tts';
+    ttsBtn.style.cssText = `
+      position: fixed;
+      top: 280px;
+      right: 20px;
+      z-index: 10000;
+      background: #17a2b8;
+      color: white;
+      padding: 12px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-size: 14px;
+    `;
+    ttsBtn.textContent = '🔊 Test TTS';
+    ttsBtn.title = 'Test TTS provider with sample audio';
+    ttsBtn.addEventListener('click', async () => {
+      console.log('DubFusion: TTS probe requested (fallback)');
+      ttsProbeStatus = `TTS probe… (${dfSettings.ttsProvider || 'None'})`;
+      updateDebugOverlay();
+      
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'DF_TTS_PROBE_REQUEST' });
+        if (response.success) {
+          console.log('DubFusion: TTS probe successful');
+          ttsProbeStatus = 'TTS probe: playing ✓';
+          updateDebugOverlay();
+          // Clear status after a few seconds
+          setTimeout(() => {
+            ttsProbeStatus = '';
+            updateDebugOverlay();
+          }, 3000);
+        } else {
+          console.warn('DubFusion: TTS probe failed:', response.error);
+          ttsProbeStatus = `TTS probe failed: ${response.error}`;
+          updateDebugOverlay();
+          // Clear status after a few seconds
+          setTimeout(() => {
+            ttsProbeStatus = '';
+            updateDebugOverlay();
+          }, 5000);
+        }
+      } catch (e) {
+        console.error('DubFusion: TTS probe error:', e);
+        ttsProbeStatus = 'TTS probe failed: network error';
+        updateDebugOverlay();
+        // Clear status after a few seconds
+        setTimeout(() => {
+          ttsProbeStatus = '';
+          updateDebugOverlay();
+        }, 5000);
+      }
+    });
+
     // Add settings link for fallback UI
     const settingsLink = document.createElement('a');
     settingsLink.textContent = '⚙ Settings';
     settingsLink.href = '#';
     settingsLink.style.cssText = `
       position: fixed;
-      top: 260px;
+      top: 320px;
       right: 20px;
       z-index: 10000;
       font-size: 12px;
@@ -550,6 +663,7 @@
     document.body.appendChild(floatingBtn);
     document.body.appendChild(capBtn);
     document.body.appendChild(rewriteBtn);
+    document.body.appendChild(ttsBtn);
     document.body.appendChild(settingsLink);
     console.log('DubFusion: Floating UI injected successfully');
   }

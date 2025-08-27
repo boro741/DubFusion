@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DubFusion TTS Probe Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; }
+        .status { font-weight: bold; color: #007bff; }
+        .error { color: #dc3545; }
+        .success { color: #28a745; }
+        button { margin: 5px; padding: 8px 12px; border-radius: 4px; cursor: pointer; }
+        .debug-output { background: #000; color: #fff; padding: 10px; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>DubFusion TTS Probe Test</h1>
+    
+    <div class="test-section">
+        <h3>Test Instructions:</h3>
+        <ol>
+            <li>Load the DubFusion extension in Chrome</li>
+            <li>Go to Options and configure a TTS provider (recommend OpenAI first)</li>
+            <li>Navigate to YouTube or this test page</li>
+            <li>Click the "🔊 Test TTS" button</li>
+            <li>Listen for audio playback and check debug overlay</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h3>Expected Behavior:</h3>
+        <ul>
+            <li><strong>Button appears:</strong> "🔊 Test TTS" button visible in UI</li>
+            <li><strong>Debug overlay:</strong> Shows "TTS probe… (Provider)" when clicked</li>
+            <li><strong>Success:</strong> Shows "TTS probe: playing ✓" and plays audio</li>
+            <li><strong>Error handling:</strong> Shows helpful error messages for various failure cases</li>
+            <li><strong>Audio playback:</strong> Clear "DubFusion test voice" audio from speakers</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h3>Test Scenarios:</h3>
+        <ol>
+            <li><strong>No Provider:</strong> Set provider to "None" → click Test TTS → should show error</li>
+            <li><strong>Missing Key:</strong> Select provider but don't set API key → should show error</li>
+            <li><strong>Valid Setup:</strong> Configure OpenAI with valid key → should play audio</li>
+            <li><strong>Network Error:</strong> Use invalid key → should show API error</li>
+            <li><strong>Other Providers:</strong> Test ElevenLabs/Azure/Google → should show "not implemented"</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h3>Manual Test:</h3>
+        <button onclick="testTTSProbe()">Test TTS Probe (Manual)</button>
+        <button onclick="checkExtensionStatus()">Check Extension Status</button>
+        <div id="testOutput" class="debug-output"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Troubleshooting:</h3>
+        <ul>
+            <li><strong>No audio:</strong> Check browser permissions, system volume, and extension status</li>
+            <li><strong>API errors:</strong> Verify API key is correct and has TTS permissions</li>
+            <li><strong>Extension not loading:</strong> Check chrome://extensions/ and reload extension</li>
+            <li><strong>Console errors:</strong> Open DevTools and check for JavaScript errors</li>
+        </ul>
+    </div>
+
+    <script>
+        function log(message) {
+            const output = document.getElementById('testOutput');
+            const timestamp = new Date().toLocaleTimeString();
+            output.innerHTML += `[${timestamp}] ${message}\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        async function testTTSProbe() {
+            log('Testing TTS probe...');
+            
+            try {
+                // Check if extension is available
+                if (!chrome.runtime) {
+                    log('ERROR: Chrome extension API not available');
+                    return;
+                }
+                
+                log('Sending DF_TTS_PROBE_REQUEST to background...');
+                const response = await chrome.runtime.sendMessage({ type: 'DF_TTS_PROBE_REQUEST' });
+                
+                if (response.success) {
+                    log('SUCCESS: TTS probe completed successfully');
+                    log('Audio should be playing now...');
+                } else {
+                    log(`ERROR: TTS probe failed - ${response.error}`);
+                }
+                
+            } catch (e) {
+                log(`ERROR: TTS probe exception - ${e.message}`);
+            }
+        }
+
+        async function checkExtensionStatus() {
+            log('Checking extension status...');
+            
+            try {
+                // Check if extension is loaded
+                if (!chrome.runtime) {
+                    log('ERROR: Chrome extension API not available');
+                    return;
+                }
+                
+                // Try to get extension info
+                const manifest = chrome.runtime.getManifest();
+                log(`Extension: ${manifest.name} v${manifest.version}`);
+                
+                // Check if we can send messages
+                const response = await chrome.runtime.sendMessage({ type: 'DF_PLAY_BEEP' });
+                if (response && response.ok) {
+                    log('SUCCESS: Extension communication working');
+                } else {
+                    log('WARNING: Extension communication may have issues');
+                }
+                
+            } catch (e) {
+                log(`ERROR: Extension status check failed - ${e.message}`);
+            }
+        }
+
+        // Auto-check on page load
+        setTimeout(() => {
+            log('TTS Probe test page loaded');
+            log('Make sure DubFusion extension is loaded and configured');
+        }, 1000);
+    </script>
+</body>
+</html>
