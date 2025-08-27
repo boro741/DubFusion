@@ -8,6 +8,96 @@
   let tries = 0;
   const MAX_TRIES = 600; // Increased max tries
 
+  let captionSniffer;
+  let debugUI;
+  let dfSettings = { stylePrompt: "", mix: 70, glossary: [] };
+
+  async function loadSettings() {
+    const { dfSettings: s } = await chrome.storage.sync.get('dfSettings');
+    dfSettings = s || dfSettings;
+  }
+
+  // --- Debug overlay ---
+  function ensureDebugUI() {
+    if (debugUI) return debugUI;
+    debugUI = document.createElement('div');
+    debugUI.id = 'dubfusion-debug';
+    Object.assign(debugUI.style, {
+      position: 'fixed', top: '12px', right: '12px', zIndex: '999999',
+      background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '8px 10px',
+      borderRadius: '8px', fontSize: '12px', maxWidth: '360px', lineHeight: '1.35',
+      pointerEvents: 'none', whiteSpace: 'pre-wrap'
+    });
+    const gloss = (dfSettings.glossary || []).slice(0,3).join(', ');
+    debugUI.textContent = `DubFusion • Mix:${dfSettings.mix}% • Gloss:[${gloss}]`;
+    document.body.appendChild(debugUI);
+    return debugUI;
+  }
+
+  function setDebugLines(lines) {
+    ensureDebugUI();
+    const header = `DubFusion • Mix:${dfSettings.mix}%`;
+    const all = [header, ...lines];
+    debugUI.textContent = all.join('\n');
+  }
+
+  // --- Caption Sniffer ---
+  class CaptionSniffer {
+    constructor(videoEl) {
+      this.video = videoEl;
+      this.timer = null;
+      this.lastText = '';
+      this.current = null; // { start, text }
+      this.history = [];   // keep last N
+    }
+    start() {
+      if (this.timer) return;
+      this.timer = setInterval(() => this.tick(), 100);
+      setDebugLines(['DubFusion: captions ▶ (waiting for text)']);
+    }
+    stop() {
+      clearInterval(this.timer); this.timer = null;
+      this.flushCurrent();
+      setDebugLines(['DubFusion: captions ⏸']);
+    }
+    getVisibleCaptionText() {
+      // Collect visible caption segments from the player
+      const segs = Array.from(document.querySelectorAll('.ytp-caption-window-container .ytp-caption-segment'));
+      const text = segs.map(s => s.textContent.trim()).join(' ').trim();
+      return text;
+    }
+    flushCurrent() {
+      if (this.current) {
+        const end = this.video?.currentTime ?? 0;
+        const line = `[${this.format(this.current.start)} → ${this.format(end)}] ${this.current.text}`;
+        this.history.push(line);
+        this.history = this.history.slice(-5);
+        setDebugLines(this.history);
+        this.current = null;
+      }
+    }
+    tick() {
+      const nowText = this.getVisibleCaptionText();
+      if (!nowText) {
+        // No captions visible; if we had one, flush it
+        if (this.current) this.flushCurrent();
+        this.lastText = '';
+        return;
+      }
+      if (nowText !== this.lastText) {
+        // Caption changed; close previous and start a new one
+        if (this.current) this.flushCurrent();
+        this.current = { start: this.video?.currentTime ?? 0, text: nowText };
+        this.lastText = nowText;
+      }
+    }
+    format(sec) {
+      const s = Math.max(0, sec|0);
+      const m = (s/60)|0; const r = s%60;
+      return `${m}:${String(r).padStart(2,'0')}`;
+    }
+  }
+
   function getPlayerContainer() {
     // Try multiple selectors for different YouTube layouts
     const selectors = [
@@ -118,6 +208,37 @@
     `;
     btn.title = 'Play a short overlay beep and toggle ducking';
 
+    const capBtn = document.createElement('button');
+    capBtn.textContent = '▶ Captions';
+    capBtn.style.cssText = `
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      font-size: 14px;
+      background: #28a745;
+      color: white;
+      font-weight: bold;
+    `;
+    capBtn.title = 'Toggle caption sniffer';
+    let capOn = false;
+    capBtn.addEventListener('click', () => {
+      const vid = document.querySelector('video');
+      if (!vid) return;
+      if (!captionSniffer) captionSniffer = new CaptionSniffer(vid);
+      capOn = !capOn;
+      if (capOn) { 
+        captionSniffer.start(); 
+        capBtn.textContent = '⏸ Captions';
+        capBtn.style.background = '#dc3545';
+      }
+      else { 
+        captionSniffer.stop(); 
+        capBtn.textContent = '▶ Captions';
+        capBtn.style.background = '#28a745';
+      }
+    });
+
     const settingsLink = document.createElement('a');
     settingsLink.textContent = '⚙ Settings';
     settingsLink.href = '#';
@@ -158,6 +279,7 @@
     });
 
     wrapper.appendChild(btn);
+    wrapper.appendChild(capBtn);
     wrapper.appendChild(settingsLink);
     wrapper.appendChild(status);
     
@@ -225,13 +347,50 @@
       }
     });
 
+    // Add captions button for fallback UI
+    const capBtn = document.createElement('div');
+    capBtn.id = 'dubfusion-captions';
+    capBtn.style.cssText = `
+      position: fixed;
+      top: 160px;
+      right: 20px;
+      z-index: 10000;
+      background: #28a745;
+      color: white;
+      padding: 12px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: bold;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-size: 14px;
+    `;
+    capBtn.textContent = '▶ Captions';
+    capBtn.title = 'Toggle caption sniffer';
+    let capOn = false;
+    capBtn.addEventListener('click', () => {
+      const vid = document.querySelector('video');
+      if (!vid) return;
+      if (!captionSniffer) captionSniffer = new CaptionSniffer(vid);
+      capOn = !capOn;
+      if (capOn) { 
+        captionSniffer.start(); 
+        capBtn.textContent = '⏸ Captions';
+        capBtn.style.background = '#dc3545';
+      }
+      else { 
+        captionSniffer.stop(); 
+        capBtn.textContent = '▶ Captions';
+        capBtn.style.background = '#28a745';
+      }
+    });
+
     // Add settings link for fallback UI
     const settingsLink = document.createElement('a');
     settingsLink.textContent = '⚙ Settings';
     settingsLink.href = '#';
     settingsLink.style.cssText = `
       position: fixed;
-      top: 140px;
+      top: 200px;
       right: 20px;
       z-index: 10000;
       font-size: 12px;
@@ -249,12 +408,13 @@
     });
 
     document.body.appendChild(floatingBtn);
+    document.body.appendChild(capBtn);
     document.body.appendChild(settingsLink);
     console.log('DubFusion: Floating UI injected successfully');
   }
 
   // Start injection process
-  injectUI();
+  loadSettings().then(injectUI);
 
   // Listen for background relay to toggle mute/duck
   chrome.runtime.onMessage.addListener((msg) => {
