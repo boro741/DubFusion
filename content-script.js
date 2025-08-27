@@ -55,7 +55,8 @@
       pointerEvents: 'none', whiteSpace: 'pre-wrap'
     });
     const gloss = (dfSettings.glossary || []).slice(0,3).join(', ');
-    debugUI.textContent = `DubFusion • Mix:${dfSettings.mix}% • Gloss:[${gloss}]`;
+    const ttsProvider = dfSettings.ttsProvider || 'None';
+    debugUI.textContent = `DubFusion • Mix:${dfSettings.mix}% • TTS:${ttsProvider} • Gloss:[${gloss}]`;
     document.body.appendChild(debugUI);
     return debugUI;
   }
@@ -69,7 +70,8 @@
 
   function updateDebugOverlay() {
     ensureDebugUI();
-    const header = `DubFusion • Mix:${dfSettings.mix}%`;
+    const ttsProvider = dfSettings.ttsProvider || 'None';
+    const header = `DubFusion • Mix:${dfSettings.mix}% • TTS:${ttsProvider}`;
     const lines = [];
     
     // Add RAW section

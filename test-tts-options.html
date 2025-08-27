@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DubFusion TTS Options Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; }
+        .storage-info { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 4px; }
+        button { margin: 5px; padding: 8px 12px; border-radius: 4px; cursor: pointer; }
+        .debug-output { background: #000; color: #fff; padding: 10px; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>DubFusion TTS Options Test</h1>
+    
+    <div class="test-section">
+        <h3>Test Instructions:</h3>
+        <ol>
+            <li>Load the DubFusion extension in Chrome</li>
+            <li>Go to the Options page (chrome-extension://[ID]/options.html)</li>
+            <li>Test the TTS provider functionality</li>
+            <li>Use the buttons below to inspect storage</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h3>Storage Inspection:</h3>
+        <button onclick="inspectSyncStorage()">Inspect Sync Storage (dfSettings)</button>
+        <button onclick="inspectLocalStorage()">Inspect Local Storage (dfSecrets)</button>
+        <button onclick="clearAllStorage()">Clear All Storage</button>
+        <button onclick="setTestData()">Set Test Data</button>
+        <div id="storageOutput" class="debug-output"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Expected Behavior:</h3>
+        <ul>
+            <li><strong>Options Page:</strong> Should show TTS provider dropdown with conditional fields</li>
+            <li><strong>Provider Selection:</strong> Switching providers should show/hide appropriate fields</li>
+            <li><strong>Secret Masking:</strong> API keys should be masked with "•••• set ••••" when saved</li>
+            <li><strong>Validation:</strong> Missing required fields should show warnings</li>
+            <li><strong>Storage Separation:</strong> Secrets in local storage, settings in sync storage</li>
+            <li><strong>Content Script:</strong> Debug header should show "TTS:[Provider]"</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h3>Test Scenarios:</h3>
+        <ol>
+            <li><strong>Basic Flow:</strong> Select ElevenLabs → enter API key → save → reload → verify masking</li>
+            <li><strong>Provider Switch:</strong> Change from ElevenLabs to Azure → verify fields change</li>
+            <li><strong>Validation:</strong> Select Azure → leave fields empty → verify warning appears</li>
+            <li><strong>Clear Secrets:</strong> Save some secrets → click "Clear secrets" → verify they're gone</li>
+            <li><strong>Defaults:</strong> Click "Restore defaults" → verify only non-sensitive fields reset</li>
+        </ol>
+    </div>
+
+    <script>
+        function log(message) {
+            const output = document.getElementById('storageOutput');
+            const timestamp = new Date().toLocaleTimeString();
+            output.innerHTML += `[${timestamp}] ${message}\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        async function inspectSyncStorage() {
+            try {
+                const result = await chrome.storage.sync.get('dfSettings');
+                log('=== SYNC STORAGE (dfSettings) ===');
+                log(JSON.stringify(result.dfSettings || {}, null, 2));
+            } catch (e) {
+                log('Error reading sync storage: ' + e.message);
+            }
+        }
+
+        async function inspectLocalStorage() {
+            try {
+                const result = await chrome.storage.local.get('dfSecrets');
+                log('=== LOCAL STORAGE (dfSecrets) ===');
+                log(JSON.stringify(result.dfSecrets || {}, null, 2));
+            } catch (e) {
+                log('Error reading local storage: ' + e.message);
+            }
+        }
+
+        async function clearAllStorage() {
+            try {
+                await Promise.all([
+                    chrome.storage.sync.clear(),
+                    chrome.storage.local.clear()
+                ]);
+                log('All storage cleared');
+            } catch (e) {
+                log('Error clearing storage: ' + e.message);
+            }
+        }
+
+        async function setTestData() {
+            try {
+                // Set test sync data
+                await chrome.storage.sync.set({
+                    dfSettings: {
+                        stylePrompt: "Test style prompt",
+                        mix: 75,
+                        glossary: ["test", "example", "data"],
+                        ttsProvider: "ElevenLabs",
+                        ttsVoiceHint: "Test Voice",
+                        version: 2
+                    }
+                });
+
+                // Set test local data
+                await chrome.storage.local.set({
+                    dfSecrets: {
+                        elevenApiKey: "test-eleven-key-12345",
+                        azureKey: "test-azure-key-67890",
+                        azureRegion: "eastus",
+                        googleKeyOrSA: "test-google-key",
+                        openaiKey: "test-openai-key"
+                    }
+                });
+
+                log('Test data set successfully');
+            } catch (e) {
+                log('Error setting test data: ' + e.message);
+            }
+        }
+
+        // Auto-inspect on page load
+        setTimeout(() => {
+            log('TTS Options test page loaded');
+            log('Use the buttons above to inspect storage');
+        }, 1000);
+    </script>
+</body>
+</html>

@@ -6,15 +6,23 @@
   <style>
     body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; max-width: 720px; }
     h1 { font-size: 18px; margin-bottom: 12px; }
+    h2 { font-size: 16px; margin: 20px 0 8px; color: #333; }
     label { display:block; font-weight:600; margin:12px 0 6px; }
-    input[type="text"], textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:8px; }
+    input[type="text"], textarea, select { width:100%; padding:8px; border:1px solid #ccc; border-radius:8px; }
     input[type="number"] { width:120px; padding:6px; border:1px solid #ccc; border-radius:8px; }
+    input[type="password"] { width:100%; padding:8px; border:1px solid #ccc; border-radius:8px; }
     .row { display:flex; gap:12px; align-items:center; }
     .actions { margin-top:16px; display:flex; gap:8px; }
     button { padding:8px 12px; border-radius:8px; border:1px solid #ccc; cursor:pointer; }
     .hint { font-size:12px; opacity:.7; }
     .ok { color: #0a7a3d; font-weight:600; }
     .err { color: #b00020; font-weight:600; }
+    .warning { color: #f57c00; font-weight:600; }
+    .provider-section { margin-top: 20px; padding: 16px; border: 1px solid #e0e0e0; border-radius: 8px; background: #f9f9f9; }
+    .provider-fields { margin-top: 12px; }
+    .provider-field { margin-bottom: 12px; }
+    .disclaimer { font-size: 11px; opacity: 0.6; margin-top: 8px; font-style: italic; }
+    .validation-warning { color: #f57c00; font-size: 12px; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -34,9 +42,69 @@
   <textarea id="glossary" rows="4" placeholder="API, class, state, overloading"></textarea>
   <div class="hint">Comma or newline separated.</div>
 
+  <div class="provider-section">
+    <h2>Text-to-Speech Provider</h2>
+    
+    <label for="ttsProvider">TTS Provider</label>
+    <select id="ttsProvider">
+      <option value="None">None (default)</option>
+      <option value="ElevenLabs">ElevenLabs</option>
+      <option value="Azure">Azure Speech</option>
+      <option value="Google">Google Cloud TTS</option>
+      <option value="OpenAI">OpenAI TTS/Realtime</option>
+    </select>
+    <div class="hint">Select your preferred text-to-speech provider for audio output.</div>
+
+    <div class="provider-fields" id="providerFields" style="display: none;">
+      <!-- ElevenLabs Fields -->
+      <div class="provider-field" id="elevenLabsFields" style="display: none;">
+        <label for="elevenApiKey">ElevenLabs API Key</label>
+        <input type="password" id="elevenApiKey" placeholder="•••• set ••••" />
+        <div class="hint">Your ElevenLabs API key for voice synthesis.</div>
+      </div>
+
+      <!-- Azure Fields -->
+      <div class="provider-field" id="azureFields" style="display: none;">
+        <label for="azureKey">Azure Speech API Key</label>
+        <input type="password" id="azureKey" placeholder="•••• set ••••" />
+        <div class="hint">Your Azure Speech Service API key.</div>
+        
+        <label for="azureRegion">Azure Region</label>
+        <input type="text" id="azureRegion" placeholder="e.g., eastus, westus2" />
+        <div class="hint">The Azure region where your Speech Service is deployed.</div>
+      </div>
+
+      <!-- Google Fields -->
+      <div class="provider-field" id="googleFields" style="display: none;">
+        <label for="googleKeyOrSA">Google Cloud API Key or Service Account JSON</label>
+        <textarea id="googleKeyOrSA" rows="6" placeholder="Paste your API key or service account JSON here"></textarea>
+        <div class="hint">Either your API key or the full service account JSON content.</div>
+      </div>
+
+      <!-- OpenAI Fields -->
+      <div class="provider-field" id="openaiFields" style="display: none;">
+        <label for="openaiKey">OpenAI API Key</label>
+        <input type="password" id="openaiKey" placeholder="•••• set ••••" />
+        <div class="hint">Your OpenAI API key for TTS services.</div>
+      </div>
+
+      <!-- Common Voice Field -->
+      <div class="provider-field">
+        <label for="ttsVoiceHint">Preferred Voice ID/Name (optional)</label>
+        <input type="text" id="ttsVoiceHint" placeholder="e.g., Rachel, en-US-JennyNeural, or voice ID" />
+        <div class="hint">Specific voice to use with your selected provider.</div>
+      </div>
+
+      <div class="validation-warning" id="validationWarning" style="display: none;"></div>
+    </div>
+
+    <div class="disclaimer">Keys are stored locally on this device (chrome.storage.local).</div>
+  </div>
+
   <div class="actions">
     <button id="save">Save</button>
     <button id="reset">Restore defaults</button>
+    <button id="clearSecrets">Clear secrets</button>
     <span id="status"></span>
   </div>
 
