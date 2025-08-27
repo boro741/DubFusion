@@ -118,6 +118,21 @@
     `;
     btn.title = 'Play a short overlay beep and toggle ducking';
 
+    const settingsLink = document.createElement('a');
+    settingsLink.textContent = '⚙ Settings';
+    settingsLink.href = '#';
+    settingsLink.style.cssText = `
+      font-size: 12px;
+      color: #007bff;
+      text-decoration: none;
+      cursor: pointer;
+      align-self: center;
+    `;
+    settingsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.runtime.openOptionsPage();
+    });
+
     const status = document.createElement('span');
     status.textContent = 'ready';
     status.style.cssText = `
@@ -143,6 +158,7 @@
     });
 
     wrapper.appendChild(btn);
+    wrapper.appendChild(settingsLink);
     wrapper.appendChild(status);
     
     // Try different insertion methods
@@ -209,7 +225,31 @@
       }
     });
 
+    // Add settings link for fallback UI
+    const settingsLink = document.createElement('a');
+    settingsLink.textContent = '⚙ Settings';
+    settingsLink.href = '#';
+    settingsLink.style.cssText = `
+      position: fixed;
+      top: 140px;
+      right: 20px;
+      z-index: 10000;
+      font-size: 12px;
+      color: #007bff;
+      text-decoration: none;
+      cursor: pointer;
+      background: white;
+      padding: 8px 12px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    `;
+    settingsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.runtime.openOptionsPage();
+    });
+
     document.body.appendChild(floatingBtn);
+    document.body.appendChild(settingsLink);
     console.log('DubFusion: Floating UI injected successfully');
   }
 
