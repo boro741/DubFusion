@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DubFusion Extension Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { background: #d4edda; border-color: #c3e6cb; }
+        .error { background: #f8d7da; border-color: #f5c6cb; }
+        .info { background: #d1ecf1; border-color: #bee5eb; }
+        button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>DubFusion Extension Test Page</h1>
+    
+    <div class="test-section info">
+        <h3>Extension Status Check</h3>
+        <p>This page helps verify if the DubFusion extension is working correctly.</p>
+        <button onclick="checkExtension()">Check Extension Status</button>
+        <div id="extension-status"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>Manual Test</h3>
+        <p>If the extension is working, you should see a "DubFusion (Hello)" button below:</p>
+        <div id="test-area" style="min-height: 50px; border: 1px dashed #ccc; padding: 10px;">
+            <p>Test area - extension should inject UI here if working</p>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h3>Console Messages</h3>
+        <p>Open browser console (F12) and look for messages starting with "DubFusion:"</p>
+        <button onclick="simulateClick()">Simulate Extension Click</button>
+    </div>
+
+    <script>
+        function checkExtension() {
+            const statusDiv = document.getElementById('extension-status');
+            
+            // Check if chrome.runtime is available
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                statusDiv.innerHTML = '<div class="success">✅ Chrome extension API is available</div>';
+                
+                // Try to send a test message
+                try {
+                    chrome.runtime.sendMessage({ type: 'TEST_MESSAGE' }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            statusDiv.innerHTML += '<div class="error">❌ Extension not loaded or not responding</div>';
+                        } else {
+                            statusDiv.innerHTML += '<div class="success">✅ Extension is responding to messages</div>';
+                        }
+                    });
+                } catch (e) {
+                    statusDiv.innerHTML += '<div class="error">❌ Error communicating with extension: ' + e.message + '</div>';
+                }
+            } else {
+                statusDiv.innerHTML = '<div class="error">❌ Chrome extension API not available</div>';
+            }
+        }
+
+        function simulateClick() {
+            console.log('DubFusion: Simulating extension button click...');
+            // This will help verify if the content script is listening
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                chrome.runtime.sendMessage({ type: 'DF_PLAY_BEEP' }, (response) => {
+                    console.log('DubFusion: Response from extension:', response);
+                });
+            }
+        }
+
+        // Auto-check on page load
+        window.addEventListener('load', () => {
+            setTimeout(checkExtension, 1000);
+        });
+    </script>
+</body>
+</html>
