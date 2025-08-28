@@ -191,6 +191,151 @@
 
 ---
 
+## S4M.1 — Batching Engine (Join Rules)
+**Date:** December 2024  
+**Version:** v0.4.0
+
+### Added
+- **Batcher Class**: Complete batching engine with join rules
+- **Join Rules**: Converts Cues to Batches using configurable rules
+- **Overlay Toggle**: CUES | BATCHES view toggle in debug overlay
+- **Batch Display**: Shows next 3 batches with timing and text
+- **Configuration**: Batch join rules with constants
+
+### Technical Details
+- **Join Rules**: gap ≤ 400ms, joinedDuration ≤ 2.5s, chars ≤ 140
+- **Sort & Dedupe**: Automatic sorting by start time and deduplication by ID
+- **Batch Structure**: { startSec, endSec, text, cueIds[] }
+- **View Toggle**: Interactive toggle between CUES and BATCHES views
+- **Default View**: BATCHES view when available, falls back to CUES
+
+### Components
+- **Batcher**: Main batching engine with join logic
+- **Join Rules**: Configurable rules for merging adjacent cues
+- **Overlay Integration**: Toggle functionality and batch display
+- **CSS Styling**: Toggle button styles and hover effects
+
+### Configuration
+- **batchJoinGapMs**: 400ms (maximum gap between cues)
+- **batchMaxDurationSec**: 2.5s (maximum batch duration)
+- **batchMaxChars**: 140 (maximum characters per batch)
+
+### Files Modified
+- `extension/src/content/content-script.js` - Added Batcher class and overlay toggle
+- `extension/src/content/content.css` - Added toggle button styles
+- `docs/changelog.md` - Added S4M.1 entry
+
+### Testing Notes
+- Verify overlay toggle CUES | BATCHES is visible and functional
+- Check that adjacent tiny cues are merged when rules allow
+- Confirm no batch violates invariants (0 ≤ start < end, ≤2.5s, ≤140 chars)
+- Test SPA navigation preserves toggle state
+- Verify batch counts decrease compared to individual cues
+
+---
+
+## E0.2 — ElevenLabs TTS Integration Fix
+**Date:** December 2024  
+**Version:** v0.4.2
+
+### Fixed
+- **In-Video ElevenLabs TTS**: Fixed issue where ElevenLabs TTS was not working during YouTube video playback
+- **TTS Provider Detection**: Content script now properly reads TTS provider setting from chrome.storage.sync
+- **Scheduler Integration**: Scheduler now correctly switches between Browser TTS and ElevenLabs TTS
+- **ArrayBuffer Serialization**: Fixed ArrayBuffer transfer issues for chrome.runtime.sendMessage
+- **Offscreen Audio Playback**: Proper reconstruction of ArrayBuffer in offscreen document
+
+### Technical Details
+- **TTS Provider Loading**: `updateOverlayHeader()` now reads `dfTtsProvider` from storage and updates scheduler
+- **ElevenLabs Synthesis**: `startSynthesis()` method sends `DF_ELEVEN_SYNTHESIZE` messages to background
+- **Audio Playback**: `playElevenLabsTTS()` handles different synthesis job states (PLAYED, IN_FLIGHT, FAILED)
+- **Mute Management**: Proper video muting during ElevenLabs audio playback with duration estimation
+- **Overlay Integration**: Header shows current TTS provider and updates in real-time
+
+### Components
+- **Content Script**: Enhanced scheduler with ElevenLabs synthesis and playback logic
+- **Background Script**: ElevenLabs synthesis handler with proper ArrayBuffer serialization
+- **Offscreen Document**: ArrayBuffer reconstruction and audio playback
+- **Overlay**: Real-time TTS provider display in header
+
+### Data Flow
+1. Content script detects TTS provider from storage
+2. Scheduler triggers ElevenLabs synthesis for upcoming cues
+3. Background script fetches audio from ElevenLabs API
+4. Audio sent to offscreen document via chrome.runtime.sendMessage
+5. Offscreen reconstructs ArrayBuffer and plays audio via WebAudio
+6. Video muted during playback, restored after completion
+
+### Files Modified
+- `extension/src/content/content-script.js` - Added ElevenLabs TTS integration in scheduler
+- `extension/src/background.js` - Enhanced ElevenLabs synthesis with proper ArrayBuffer handling
+- `extension/src/offscreen/offscreen.js` - Added ArrayBuffer reconstruction for audio playback
+
+### Testing Notes
+- Select ElevenLabs as TTS provider in options page
+- Load YouTube video with manual transcript
+- Verify overlay shows "TTS: elevenlabs" in header
+- Confirm ElevenLabs audio plays during video playback
+- Check that video mutes during speech and restores after
+- Test seek/pause/ratechange events with ElevenLabs TTS
+
+---
+
+## E0.1 — ElevenLabs Preflight & Settings
+**Date:** December 2024  
+**Version:** v0.4.1
+
+### Added
+- **ElevenLabs TTS Provider**: Added ElevenLabs as selectable TTS provider alongside Browser TTS
+- **Options UI**: TTS provider dropdown and comprehensive ElevenLabs configuration section
+- **API Key Management**: Secure storage of ElevenLabs API keys in chrome.storage.local
+- **Voice Settings**: Model ID, Voice ID, stability, similarity boost, style, and speaker boost controls
+- **Voice Listing**: "List Voices" button fetches available voices from ElevenLabs API
+- **Test Functionality**: "🔊 Test ElevenLabs" button plays sample audio via offscreen document
+- **Overlay Integration**: Shows TTS provider in debug overlay header
+- **Error Handling**: Comprehensive error mapping for API failures
+
+### Technical Details
+- **Background API Handlers**: DF_ELEVEN_LIST_VOICES and DF_ELEVEN_TEST_TTS
+- **Secure Storage**: API keys in local storage, settings in sync storage
+- **Offscreen Audio**: Enhanced offscreen.js for MP3 audio playback
+- **Voice Settings**: Stability, similarity boost, style, speaker boost controls
+- **Error Mapping**: 401/403 (invalid key), 429 (rate limit), 5xx (service error)
+
+### Components
+- **Options UI**: TTS provider dropdown and ElevenLabs configuration section
+- **Background Service**: ElevenLabs API integration with secure key handling
+- **Offscreen Audio**: WebAudio playback for ElevenLabs MP3 responses
+- **Overlay Integration**: Real-time TTS provider display in debug overlay
+
+### Configuration
+- **Model ID**: eleven_multilingual_v2 (default)
+- **Voice Settings**: Stability (0-1), Similarity Boost (0-1), Style (0-1), Speaker Boost (boolean)
+- **Storage**: API keys in chrome.storage.local, settings in chrome.storage.sync
+
+### Security Features
+- **API Key Masking**: Keys displayed as "••••••••••••••••••••••••••••••••"
+- **Secure Storage**: Keys never exposed to content scripts
+- **Background Only**: All API calls made from service worker
+- **No Console Logging**: Keys never logged to console
+
+### Files Modified
+- `extension/src/ui/options.html` - Added TTS provider selection and ElevenLabs settings
+- `extension/src/ui/options.js` - Complete ElevenLabs integration and settings management
+- `extension/src/background.js` - ElevenLabs API handlers and secure key management
+- `extension/src/offscreen/offscreen.js` - Enhanced audio playback for MP3 files
+- `extension/src/content/content-script.js` - Overlay integration for TTS provider display
+
+### Testing Notes
+- Switch provider to ElevenLabs, paste API key, click List Voices → see names & IDs
+- Set voice ID, click 🔊 Test ElevenLabs → audio plays once, video unaffected
+- Toggle between tabs and back → Options shows saved values
+- Check DevTools → no uncaught errors, network calls show accept: audio/mpeg
+- Verify overlay shows "TTS: elevenlabs" when provider is selected
+- Test error handling with invalid API key and network failures
+
+---
+
 ### Bug Fixes
 - **S2.1**: Fixed TextTrackStrategy not detecting captions when CC is ON
   - Added proper event listeners for `loadeddata` and `loadedmetadata` events

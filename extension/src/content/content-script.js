@@ -839,6 +839,17 @@
       console.log('[DubFusion] Scheduler config updated:', this.config);
     }
 
+    setTtsProvider(newProvider) {
+      if (this.ttsProvider !== newProvider) {
+        console.log(`[DubFusion] TTS provider changed from ${this.ttsProvider} to ${newProvider}`);
+        this.ttsProvider = newProvider;
+        // If we switch to browser TTS, we might need to re-init speech synthesis
+        if (newProvider === 'browser') {
+          this.initSpeechSynthesis();
+        }
+      }
+    }
+
     getStats() {
       return {
         playCount: this.state.playCount,
@@ -1199,15 +1210,25 @@
 
     const source = captionProvider ? captionProvider.getSourceLabel() : '—';
     
-    // Get TTS provider
-    let ttsProvider = '';
+    // Get TTS provider and update scheduler
+    let ttsProviderLabel = '';
+    let currentTtsProvider = 'browser';
     try {
       const { dfTtsProvider: provider } = await chrome.storage.sync.get('dfTtsProvider');
-      if (provider && provider !== 'browser') {
-        ttsProvider = ` • TTS: ${provider}`;
+      if (provider) {
+        currentTtsProvider = provider;
+      }
+      if (scheduler) {
+        scheduler.setTtsProvider(currentTtsProvider);
+      }
+      if (currentTtsProvider !== 'browser') {
+        ttsProviderLabel = ` • TTS: ${currentTtsProvider}`;
       }
     } catch (error) {
       console.warn('[DubFusion] Failed to get TTS provider:', error);
+      if (scheduler) {
+        scheduler.setTtsProvider('browser'); // Fallback on error
+      }
     }
     
     // Get scheduler stats if available
@@ -1217,7 +1238,7 @@
       schedulerStats = ` • play:${stats.playCount} skip:${stats.skipCount}`;
     }
     
-    header.innerHTML = `DubFusion • v0 overlay • Source:${source} • Horizon:+0.0s • Ready:+0.0s${ttsProvider}${schedulerStats}`;
+    header.innerHTML = `DubFusion • v0 overlay • Source:${source} • Horizon:+0.0s • Ready:+0.0s${ttsProviderLabel}${schedulerStats}`;
   }
 
   // Update cues section with next 3 cues or batches

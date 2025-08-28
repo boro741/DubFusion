@@ -34,7 +34,30 @@ The Scheduler is responsible for timing and playing back manual transcript cues 
 - **Event Resilience**: Handles seek, pause, and rate changes with proper cleanup
 - **Voice Selection**: Automatic English voice selection with fallback
 
-**Data Flow**: ManualTranscriptProvider → Scheduler → SpeechSynthesisUtterance → Video Mute Control
+**Data Flow**: ManualTranscriptProvider → Batcher → Scheduler → SpeechSynthesisUtterance → Video Mute Control
+
+### Batcher (S4M.1)
+The Batcher module converts individual caption cues into optimal batches for processing. It implements configurable join rules to merge adjacent cues based on timing gaps, duration limits, and character constraints. The batcher provides a unified interface for both display (overlay toggle) and future processing pipelines.
+
+**Key Features**:
+- **Join Rules**: Configurable rules for merging adjacent cues (gap ≤ 400ms, duration ≤ 2.5s, chars ≤ 140)
+- **Sort & Dedupe**: Automatic sorting by start time and deduplication by cue ID
+- **Batch Structure**: Maintains timing information and references to original cues
+- **Overlay Integration**: Toggle between CUES and BATCHES views in debug overlay
+
+**Data Flow**: CaptionProvider → Batcher → Display/Processing
+
+### ElevenLabs Integration (E0)
+The ElevenLabs integration provides cloud-based text-to-speech capabilities with high-quality voices. The system includes secure API key management, voice selection, and test functionality through the options interface.
+
+**Key Features**:
+- **Secure Storage**: API keys stored in chrome.storage.local, never exposed to content scripts
+- **Voice Management**: List and select from available ElevenLabs voices
+- **Test Functionality**: Play test audio through offscreen WebAudio context
+- **Settings UI**: Comprehensive configuration interface with sliders and controls
+- **Error Handling**: Robust error mapping for API failures and network issues
+
+**Data Flow**: Options UI → Background Service → ElevenLabs API → Offscreen Audio Playback
 
 ### Background Service Worker
 The service worker (`extension/src/background.js`) handles cloud API calls, secrets management, and background processing tasks.

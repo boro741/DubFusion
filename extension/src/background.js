@@ -117,10 +117,9 @@ async function handleElevenLabsSynthesize(text) {
 
     console.log('[DubFusion Background] Using voice ID:', settings.voiceId);
 
-    // Make sure offscreen is ready in parallel with network fetch
+    // Make sure offscreen is ready
     await ensureOffscreen();
-    const offscreenReadyPromise = waitForOffscreenReady();
-    
+
     const requestBody = {
       text: text,
       model_id: settings.modelId || 'eleven_multilingual_v2',
@@ -151,16 +150,17 @@ async function handleElevenLabsSynthesize(text) {
     // Get audio data
     const audioBuffer = await response.arrayBuffer();
     console.log('[DubFusion Background] Got audio buffer, size:', audioBuffer.byteLength);
-    
-    // Await offscreen readiness (in case it wasn't ready yet)
-    await offscreenReadyPromise;
+
+    // Convert ArrayBuffer to a serializable format (an array of numbers)
+    const serializedBuffer = Array.from(new Uint8Array(audioBuffer));
+
     console.log('[DubFusion Background] Sending audio to offscreen for playback');
     
     // Send audio to offscreen for playback
     chrome.runtime.sendMessage({
       type: 'DF_OSC_PLAY_AUDIO',
       mimeType: 'audio/mpeg',
-      arrayBuffer: audioBuffer
+      arrayBuffer: serializedBuffer
     });
     console.log('[DubFusion Background] Audio sent to offscreen');
     
