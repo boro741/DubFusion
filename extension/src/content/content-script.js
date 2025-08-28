@@ -10,6 +10,7 @@
   let captionProvider = null;
   let currentVideo = null;
   let currentVideoId = null;
+  let scheduler = null;
 
   // CaptionProvider module - unified interface for caption access
   class CaptionProvider {
@@ -387,6 +388,380 @@
     }
   }
 
+  // Scheduler - Browser TTS + mute functionality
+  class Scheduler {
+    constructor() {
+      this.video = null;
+      this.provider = null;
+      this.config = {
+        leadTimeSec: 0.8,        // Much shorter horizon for faster response
+        lateSkipThresholdSec: 1.0,
+        earlyStartSlackMs: 20    // Very aggressive early start
+      };
+      this.state = {
+        isRunning: false,
+        planningInterval: null,
+        pendingTimers: new Map(),
+        itemStates: new Map(),
+        duckCount: 0,
+        prevMuted: false,
+        playCount: 0,
+        skipCount: 0,
+        speechWarmed: false
+      };
+      this.preferredVoice = null;
+      this.voicesLoaded = false;
+    }
+
+    async init(videoEl, provider) {
+      console.log('[DubFusion] Scheduler.init() called');
+      
+      this.video = videoEl;
+      this.provider = provider;
+      
+      // Load config from storage
+      try {
+        const { dfSchedulerConfig: config } = await chrome.storage.sync.get('dfSchedulerConfig');
+        if (config) {
+          this.config = { ...this.config, ...config };
+        }
+      } catch (error) {
+        console.warn('[DubFusion] Failed to load scheduler config, using defaults:', error);
+      }
+      
+      // Initialize speech synthesis
+      await this.initSpeechSynthesis();
+      
+      // Set up video event listeners
+      this.setupVideoListeners();
+      
+      console.log('[DubFusion] Scheduler initialized with config:', this.config);
+    }
+
+    async initSpeechSynthesis() {
+      // Aggressive voice loading and initialization
+      const loadVoices = () => {
+        const voices = speechSynthesis.getVoices();
+        if (voices.length > 0) {
+          this.voicesLoaded = true;
+          this.selectPreferredVoice();
+          
+          // Immediately pre-warm with the selected voice
+          if (this.preferredVoice) {
+            const warmupUtterance = new SpeechSynthesisUtterance('a');
+            warmupUtterance.voice = this.preferredVoice;
+            warmupUtterance.rate = 1.2;
+            speechSynthesis.speak(warmupUtterance);
+            this.state.speechWarmed = true;
+            console.log('[DubFusion] Speech synthesis aggressively pre-warmed');
+          }
+        }
+      };
+      
+      // Try immediately
+      loadVoices();
+      
+      // Also listen for voices to load
+      speechSynthesis.addEventListener('voiceschanged', loadVoices);
+      
+      // Force voices to load if needed
+      if (speechSynthesis.getVoices().length === 0) {
+        speechSynthesis.getVoices(); // This sometimes triggers loading
+        setTimeout(loadVoices, 100);
+      }
+    }
+
+    selectPreferredVoice() {
+      const voices = speechSynthesis.getVoices();
+      console.log('[DubFusion] Available voices:', voices.length);
+      
+      // Try to find a preferred voice (English, natural-sounding)
+      this.preferredVoice = voices.find(voice => 
+        voice.lang.startsWith('en') && 
+        (voice.name.includes('Natural') || voice.name.includes('Premium') || voice.name.includes('Enhanced'))
+      ) || voices.find(voice => voice.lang.startsWith('en')) || voices[0];
+      
+      console.log('[DubFusion] Selected voice:', this.preferredVoice?.name || 'default');
+    }
+
+    setupVideoListeners() {
+      this.video.addEventListener('seeked', () => this.handleSeek());
+      this.video.addEventListener('pause', () => this.handlePause());
+      this.video.addEventListener('play', () => this.handlePlay());
+      this.video.addEventListener('ratechange', () => this.handleRateChange());
+    }
+
+    start() {
+      if (this.state.isRunning) return;
+      
+      console.log('[DubFusion] Scheduler.start() called');
+      this.state.isRunning = true;
+      
+      // Start planning loop - very fast cadence for minimal latency
+      this.state.planningInterval = setInterval(() => {
+        this.planningLoop();
+      }, 50); // Very fast 50ms intervals for minimal delay
+      
+      logger.log('Scheduler: started');
+    }
+
+    stop() {
+      if (!this.state.isRunning) return;
+      
+      console.log('[DubFusion] Scheduler.stop() called');
+      this.state.isRunning = false;
+      
+      // Clear planning interval
+      if (this.state.planningInterval) {
+        clearInterval(this.state.planningInterval);
+        this.state.planningInterval = null;
+      }
+      
+      // Cancel all pending timers
+      this.clearAllTimers();
+      
+      // Cancel any ongoing speech
+      speechSynthesis.cancel();
+      
+      // Reset mute state
+      this.resetMuteState();
+      
+      logger.log('Scheduler: stopped');
+    }
+
+    planningLoop() {
+      if (!this.video || !this.provider) return;
+      
+      const now = this.video.currentTime;
+      const horizon = now + this.config.leadTimeSec;
+      
+      // Get cues in the planning window
+      const cues = this.provider.getCuesInWindow(now, horizon);
+      
+      for (const cue of cues) {
+        if (!this.state.itemStates.has(cue.id)) {
+          // Check if cue is already due (very aggressive immediate start)
+          const delta = now - cue.startSec;
+          if (delta >= -0.1 && delta <= this.config.lateSkipThresholdSec) {
+            // Cue is due or slightly early - start immediately
+            console.log(`[DubFusion] Immediate start for cue ${cue.id} (delta: ${delta.toFixed(3)}s)`);
+            this.startPlayback(cue);
+          } else {
+            // Schedule for future
+            this.scheduleItem(cue, now);
+          }
+        }
+      }
+    }
+
+    scheduleItem(cue, now) {
+      const delta = now - cue.startSec;
+      
+      // Mark as scheduled
+      this.state.itemStates.set(cue.id, 'SCHEDULED');
+      
+      // Much more aggressive compensation for TTS startup latency
+      const ttsLatencyCompensation = 0.4; // 400ms compensation for TTS startup
+      const adjustedStartTime = cue.startSec - ttsLatencyCompensation;
+      const adjustedDelta = now - adjustedStartTime;
+      
+      if (adjustedDelta < -this.config.earlyStartSlackMs / 1000) {
+        // Too early - set timer with compensation
+        const delay = (adjustedStartTime - now) * 1000;
+        const timer = setTimeout(() => {
+          this.startPlayback(cue);
+        }, delay);
+        
+        this.state.pendingTimers.set(cue.id, timer);
+        console.log(`[DubFusion] Scheduled item ${cue.id} for ${delay}ms from now (with ${(ttsLatencyCompensation * 1000)}ms compensation)`);
+        
+      } else if (delta <= this.config.lateSkipThresholdSec) {
+        // Within acceptable range - start immediately
+        this.startPlayback(cue);
+        
+      } else {
+        // Too late - skip
+        this.state.itemStates.set(cue.id, 'SKIPPED');
+        this.state.skipCount++;
+        console.log(`[DubFusion] Skipped late item ${cue.id} (${delta.toFixed(2)}s late)`);
+        logger.log(`late-skip +${(delta * 1000).toFixed(0)}ms`);
+      }
+    }
+
+    startPlayback(cue) {
+      if (!this.state.isRunning) return;
+      
+      console.log(`[DubFusion] Starting playback for item ${cue.id}: "${cue.text}"`);
+      
+      // Mark as playing
+      this.state.itemStates.set(cue.id, 'PLAYING');
+      this.state.playCount++;
+      
+      // Start muting immediately
+      this.startMute();
+      
+      // Create utterance with aggressive settings for fastest startup
+      const utterance = new SpeechSynthesisUtterance(cue.text);
+      utterance.voice = this.preferredVoice;
+      utterance.rate = 1.2;      // Slightly faster speech
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      // Cancel any ongoing speech immediately for faster switching
+      speechSynthesis.cancel();
+      
+      // Aggressive pre-warming for fastest startup
+      if (!this.state.speechWarmed) {
+        const warmupUtterance = new SpeechSynthesisUtterance('a');
+        warmupUtterance.voice = this.preferredVoice;
+        warmupUtterance.rate = 1.2;
+        speechSynthesis.speak(warmupUtterance);
+        this.state.speechWarmed = true;
+        console.log('[DubFusion] Speech synthesis pre-warmed');
+      }
+      
+      // Set up event handlers
+      utterance.onend = () => {
+        const actualLatency = (this.video.currentTime - cue.startSec) * 1000;
+        console.log(`[DubFusion] Finished playback for item ${cue.id}, latency: ${actualLatency.toFixed(0)}ms`);
+        this.state.itemStates.set(cue.id, 'PLAYED');
+        this.endMute();
+        logger.log(`speak @ +${actualLatency.toFixed(0)}ms`);
+      };
+      
+      utterance.onerror = (event) => {
+        console.error(`[DubFusion] TTS error for item ${cue.id}:`, event);
+        this.state.itemStates.set(cue.id, 'ERROR');
+        this.endMute();
+      };
+      
+      // Start speaking
+      speechSynthesis.speak(utterance);
+    }
+
+    startMute() {
+      this.state.duckCount++;
+      
+      if (this.state.duckCount === 1) {
+        // First mute - remember previous state
+        this.state.prevMuted = this.video.muted;
+        this.video.muted = true;
+        console.log('[DubFusion] Muted video (was:', this.state.prevMuted, ')');
+      }
+    }
+
+    endMute() {
+      this.state.duckCount--;
+      
+      if (this.state.duckCount === 0) {
+        // Last unmute - restore previous state
+        this.video.muted = this.state.prevMuted;
+        console.log('[DubFusion] Unmuted video (restored to:', this.state.prevMuted, ')');
+      }
+    }
+
+    resetMuteState() {
+      if (this.state.duckCount > 0) {
+        this.video.muted = this.state.prevMuted;
+        this.state.duckCount = 0;
+        console.log('[DubFusion] Reset mute state to:', this.state.prevMuted);
+      }
+    }
+
+    clearAllTimers() {
+      for (const [id, timer] of this.state.pendingTimers) {
+        clearTimeout(timer);
+      }
+      this.state.pendingTimers.clear();
+    }
+
+    handleSeek() {
+      console.log('[DubFusion] Video seeked, clearing schedule');
+      
+      // Cancel all pending timers
+      this.clearAllTimers();
+      
+      // Cancel ongoing speech
+      speechSynthesis.cancel();
+      
+      // Mark playing items as canceled
+      let canceledCount = 0;
+      for (const [id, state] of this.state.itemStates) {
+        if (state === 'PLAYING') {
+          this.state.itemStates.set(id, 'CANCELED');
+          canceledCount++;
+        }
+      }
+      
+      // Reset mute state
+      this.resetMuteState();
+      
+      // Clear item states
+      this.state.itemStates.clear();
+      
+      logger.log(`seek → cleared ${canceledCount}`);
+    }
+
+    handlePause() {
+      console.log('[DubFusion] Video paused, canceling speech');
+      
+      // Cancel ongoing speech
+      speechSynthesis.cancel();
+      
+      // Mark playing items as canceled
+      let canceledCount = 0;
+      for (const [id, state] of this.state.itemStates) {
+        if (state === 'PLAYING') {
+          this.state.itemStates.set(id, 'CANCELED');
+          canceledCount++;
+        }
+      }
+      
+      // Reset mute state
+      this.resetMuteState();
+      
+      logger.log(`pause → cancel ${canceledCount}`);
+    }
+
+    handlePlay() {
+      console.log('[DubFusion] Video resumed');
+      logger.log('resume');
+    }
+
+    handleRateChange() {
+      console.log('[DubFusion] Playback rate changed, recomputing timers');
+      
+      // Clear existing timers and recompute
+      this.clearAllTimers();
+      this.state.itemStates.clear();
+    }
+
+    onUrlChange(newVideoId) {
+      console.log('[DubFusion] URL changed, stopping scheduler');
+      this.stop();
+    }
+
+    setConfig(newConfig) {
+      this.config = { ...this.config, ...newConfig };
+      console.log('[DubFusion] Scheduler config updated:', this.config);
+    }
+
+    getStats() {
+      return {
+        playCount: this.state.playCount,
+        skipCount: this.state.skipCount,
+        isRunning: this.state.isRunning
+      };
+    }
+
+    dispose() {
+      this.stop();
+      this.video = null;
+      this.provider = null;
+      console.log('[DubFusion] Scheduler disposed');
+    }
+  }
+
   // DomPollingStrategy - fallback when TextTracks aren't accessible
   class DomPollingStrategy {
     constructor(video) {
@@ -569,6 +944,16 @@
       console.log('[DubFusion] Starting caption provider initialization');
       logger.log('CaptionProvider: initializing for new video');
       await captionProvider.init(video, videoId);
+      
+      // Initialize scheduler if we have a manual transcript
+      if (captionProvider.getSourceLabel() === 'manual') {
+        console.log('[DubFusion] Manual transcript detected, initializing scheduler');
+        scheduler = new Scheduler();
+        await scheduler.init(video, captionProvider);
+        scheduler.start();
+        logger.log('Scheduler: initialized and started');
+      }
+      
       updateOverlayHeader();
       updateCuesSection();
       
@@ -604,13 +989,21 @@
     }
   }
 
-  // Update overlay header with caption source
+  // Update overlay header with caption source and scheduler stats
   function updateOverlayHeader() {
     const header = document.querySelector('.df-header');
     if (!header) return;
 
     const source = captionProvider ? captionProvider.getSourceLabel() : '—';
-    header.innerHTML = `DubFusion • v0 overlay • Source:${source} • Horizon:+0.0s • Ready:+0.0s`;
+    
+    // Get scheduler stats if available
+    let schedulerStats = '';
+    if (scheduler) {
+      const stats = scheduler.getStats();
+      schedulerStats = ` • play:${stats.playCount} skip:${stats.skipCount}`;
+    }
+    
+    header.innerHTML = `DubFusion • v0 overlay • Source:${source} • Horizon:+0.0s • Ready:+0.0s${schedulerStats}`;
   }
 
   // Update cues section with next 3 cues
@@ -809,7 +1202,11 @@
         if (existing) {
           existing.style.display = 'none';
         }
-        // Dispose caption provider
+        // Dispose caption provider and scheduler
+        if (scheduler) {
+          scheduler.dispose();
+          scheduler = null;
+        }
         if (captionProvider) {
           captionProvider.dispose();
           captionProvider = null;
@@ -838,11 +1235,12 @@
     handleUrlChange();
   }
 
-  // Set up periodic updates for cues
+  // Set up periodic updates for cues and scheduler stats
   function setupCuesUpdates() {
     setInterval(() => {
       if (captionProvider && currentVideo) {
         updateCuesSection();
+        updateOverlayHeader(); // Update scheduler stats
       }
     }, 250); // Update every 250ms
   }

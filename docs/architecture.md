@@ -22,7 +22,19 @@ The CaptionProvider automatically handles SPA navigation, reinitializing for new
 ### Manual Transcript Mode (S2M)
 The Manual Transcript Mode allows users to paste pre-built JSON transcripts into the options page for specific YouTube videos. The system validates the transcript format, stores it per video ID, and provides it through the ManualTranscriptProvider. This mode is particularly useful for testing with high-quality, pre-processed transcripts and for videos where automatic caption detection is unreliable.
 
-**Data Flow**: Options UI → JSON Validation → chrome.storage.local → ManualTranscriptProvider → Debug Overlay
+**Data Flow**: Options UI → JSON Validation → chrome.storage.local → ManualTranscriptProvider → Scheduler → Browser TTS → Debug Overlay
+
+### Scheduler (Browser TTS + Mute) (S3M)
+The Scheduler is responsible for timing and playing back manual transcript cues using the Web Speech API. It implements precise timing rules with early/late/skip logic and manages video muting during TTS playback. The scheduler operates on a 200ms planning loop, scheduling upcoming cues and managing their playback states.
+
+**Key Features**:
+- **Timing Rules**: Early start tolerance (-80ms), late skip threshold (+1.0s)
+- **State Management**: Tracks cue states from NEW to PLAYED/SKIPPED/CANCELED
+- **Mute Management**: Counter-based video muting with state restoration
+- **Event Resilience**: Handles seek, pause, and rate changes with proper cleanup
+- **Voice Selection**: Automatic English voice selection with fallback
+
+**Data Flow**: ManualTranscriptProvider → Scheduler → SpeechSynthesisUtterance → Video Mute Control
 
 ### Background Service Worker
 The service worker (`extension/src/background.js`) handles cloud API calls, secrets management, and background processing tasks.

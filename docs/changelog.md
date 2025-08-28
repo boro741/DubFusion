@@ -117,6 +117,80 @@
 
 ---
 
+## S3M — Scheduler (Browser TTS + Mute)
+**Date:** December 2024  
+**Version:** v0.3.0
+
+### Added
+- **Scheduler Class**: Complete Browser TTS scheduling system with timing rules
+- **Browser TTS Integration**: Web Speech API integration with preferred voice selection
+- **Mute Management**: Intelligent video muting during TTS with state restoration
+- **Event Handling**: Robust seek/pause/ratechange handling with proper cleanup
+- **Timing Rules**: Early/late/skip logic with configurable thresholds
+- **Overlay Integration**: Real-time scheduler statistics in debug overlay
+
+### Technical Details
+- **Planning Loop**: 200ms cadence for scheduling upcoming cues
+- **State Management**: NEW → SCHEDULED → PLAYING → PLAYED | SKIPPED | CANCELED
+- **Mute Guard**: Counter-based muting with previous state restoration
+- **Voice Selection**: Automatic English voice selection with fallback
+- **Timer Management**: Precise timing with early start and late skip policies
+- **Event Resilience**: Proper cleanup on seek, pause, and rate changes
+
+### Components
+- **Scheduler**: Main scheduling engine with planning loop and state management
+- **Browser TTS**: SpeechSynthesisUtterance integration with error handling
+- **Mute Controller**: Video muting with overlap handling and state restoration
+- **Event Handlers**: Video event listeners for seek, pause, play, ratechange
+- **Statistics**: Real-time play/skip counters in overlay header
+
+### Configuration
+- **leadTimeSec**: 2.0s (planning horizon)
+- **lateSkipThresholdSec**: 1.0s (late skip threshold)
+- **earlyStartSlackMs**: 80ms (early start tolerance)
+
+### Timing Rules
+- **Early**: Δ < -0.08s → wait with timer
+- **On-time**: -0.08s ≤ Δ ≤ +1.0s → speak immediately
+- **Late**: Δ > +1.0s → skip and count
+
+### Non-Goals (Future Sprints)
+- No batching changes (uses current cue items)
+- No rewrite/LLM integration
+- No cloud TTS or offscreen audio
+
+### Files Modified
+- `extension/src/content/content-script.js` - Added complete Scheduler class and integration
+- `docs/changelog.md` - Added S3M entry
+
+### Testing Notes
+- Test with 3-5 minute manual transcript video
+- Verify on-time speech (≥90% within 0.8s of startSec)
+- Check late-skip behavior for items >1.0s late
+- Test mute behavior (mutes during TTS, restores after)
+- Verify seek/pause/ratechange handling
+- Confirm no console errors during extended playback
+
+### Latency Optimizations (S3M.1)
+- **Planning Loop**: Reduced from 200ms to 100ms for faster response
+- **Lead Time**: Reduced from 2.0s to 1.5s for quicker scheduling
+- **Early Start Slack**: Reduced from 80ms to 50ms for earlier initiation
+- **TTS Compensation**: Added 150ms early start compensation for TTS startup latency
+- **Speech Pre-warming**: Added silent utterance to warm up speech synthesis
+- **Enhanced Logging**: Added latency tracking in console and overlay logs
+
+### Aggressive Latency Reduction (S3M.2)
+- **Planning Loop**: Further reduced to 50ms intervals for minimal delay
+- **Lead Time**: Reduced to 0.8s for much faster response
+- **Early Start Slack**: Reduced to 20ms for very aggressive early start
+- **TTS Compensation**: Increased to 400ms compensation for maximum alignment
+- **Immediate Start**: Added logic to start cues immediately if they're due or slightly early
+- **Speech Rate**: Increased to 1.2x for faster delivery
+- **Aggressive Pre-warming**: Enhanced voice loading and immediate pre-warming
+- **Speech Cancellation**: Cancel ongoing speech for faster switching between cues
+
+---
+
 ### Bug Fixes
 - **S2.1**: Fixed TextTrackStrategy not detecting captions when CC is ON
   - Added proper event listeners for `loadeddata` and `loadedmetadata` events
