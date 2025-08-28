@@ -11,6 +11,8 @@
   let currentVideo = null;
   let currentVideoId = null;
   let scheduler = null;
+  let batcher = null;
+  let overlayViewMode = 'BATCHES'; // Default to BATCHES view
 
   // CaptionProvider module - unified interface for caption access
   class CaptionProvider {
@@ -393,6 +395,7 @@
     constructor() {
       this.video = null;
       this.provider = null;
+      this.ttsProvider = 'browser'; // Default to browser
       this.config = {
         leadTimeSec: 0.8,        // Much shorter horizon for faster response
         lateSkipThresholdSec: 1.0,
@@ -409,6 +412,7 @@
         skipCount: 0,
         speechWarmed: false
       };
+      this.synthesisJobs = new Map(); // For cloud TTS audio
       this.preferredVoice = null;
       this.voicesLoaded = false;
     }
@@ -421,16 +425,21 @@
       
       // Load config from storage
       try {
-        const { dfSchedulerConfig: config } = await chrome.storage.sync.get('dfSchedulerConfig');
+        const { dfSchedulerConfig: config, dfTtsProvider } = await chrome.storage.sync.get(['dfSchedulerConfig', 'dfTtsProvider']);
         if (config) {
           this.config = { ...this.config, ...config };
+        }
+        if (dfTtsProvider) {
+          this.ttsProvider = dfTtsProvider;
         }
       } catch (error) {
         console.warn('[DubFusion] Failed to load scheduler config, using defaults:', error);
       }
       
-      // Initialize speech synthesis
-      await this.initSpeechSynthesis();
+      // Initialize speech synthesis for browser TTS
+      if (this.ttsProvider === 'browser') {
+        await this.initSpeechSynthesis();
+      }
       
       // Set up video event listeners
       this.setupVideoListeners();
@@ -521,7 +530,9 @@
       this.clearAllTimers();
       
       // Cancel any ongoing speech
-      speechSynthesis.cancel();
+      if (this.ttsProvider === 'browser') {
+        speechSynthesis.cancel();
+      }
       
       // Reset mute state
       this.resetMuteState();
@@ -540,6 +551,11 @@
       
       for (const cue of cues) {
         if (!this.state.itemStates.has(cue.id)) {
+          // If using cloud TTS, start synthesis now
+          if (this.ttsProvider === 'elevenlabs' && !this.synthesisJobs.has(cue.id)) {
+            this.startSynthesis(cue);
+          }
+        
           // Check if cue is already due (very aggressive immediate start)
           const delta = now - cue.startSec;
           if (delta >= -0.1 && delta <= this.config.lateSkipThresholdSec) {
@@ -552,6 +568,49 @@
           }
         }
       }
+    }
+
+    startSynthesis(cue) {
+      // Don't request synthesis for the same cue twice
+      if (this.synthesisJobs.has(cue.id)) return;
+      
+      console.log(`[DubFusion] Starting synthesis for cue ${cue.id}: "${cue.text}"`);
+      this.synthesisJobs.set(cue.id, { status: 'IN_FLIGHT' });
+      
+      // Send message to background script to synthesize
+      // Background will play audio directly through offscreen
+      chrome.runtime.sendMessage({
+        action: 'DF_ELEVEN_SYNTHESIZE',
+        text: cue.text
+      }).then(response => {
+        if (response.success) {
+          console.log(`[DubFusion] Synthesis successful for cue ${cue.id}: ${response.message}`);
+          this.synthesisJobs.set(cue.id, {
+            status: 'PLAYED',  // Mark as already played since background handled it
+          });
+          
+          // Since audio is already playing, we should mark the cue as PLAYING
+          this.state.itemStates.set(cue.id, 'PLAYING');
+          this.state.playCount++;
+          
+          // Start muting immediately
+          this.startMute();
+          
+          // Estimate duration and end mute (this is not perfect)
+          const estimatedDurationMs = (cue.endSec - cue.startSec) * 1000;
+          setTimeout(() => {
+            this.state.itemStates.set(cue.id, 'PLAYED');
+            this.endMute();
+          }, estimatedDurationMs);
+          
+        } else {
+          console.error(`[DubFusion] Synthesis failed for cue ${cue.id}:`, response.error);
+          this.synthesisJobs.set(cue.id, { status: 'FAILED', error: response.error });
+        }
+      }).catch(error => {
+        console.error(`[DubFusion] Error sending synthesis message for cue ${cue.id}:`, error);
+        this.synthesisJobs.set(cue.id, { status: 'FAILED', error: error.message });
+      });
     }
 
     scheduleItem(cue, now) {
@@ -600,6 +659,14 @@
       // Start muting immediately
       this.startMute();
       
+      if (this.ttsProvider === 'browser') {
+        this.playBrowserTTS(cue);
+      } else if (this.ttsProvider === 'elevenlabs') {
+        this.playElevenLabsTTS(cue);
+      }
+    }
+
+    playBrowserTTS(cue) {
       // Create utterance with aggressive settings for fastest startup
       const utterance = new SpeechSynthesisUtterance(cue.text);
       utterance.voice = this.preferredVoice;
@@ -637,6 +704,26 @@
       
       // Start speaking
       speechSynthesis.speak(utterance);
+    }
+
+    playElevenLabsTTS(cue) {
+      const job = this.synthesisJobs.get(cue.id);
+      
+      if (job && job.status === 'PLAYED') {
+        // Audio was already played by the background script during synthesis
+        console.log(`[DubFusion] Audio for cue ${cue.id} was already played during synthesis`);
+        // The mute handling is already taken care of in startSynthesis
+        
+      } else if (job && job.status === 'IN_FLIGHT') {
+        console.warn(`[DubFusion] Audio for cue ${cue.id} not ready, skipping`);
+        this.state.itemStates.set(cue.id, 'SKIPPED');
+        this.state.skipCount++;
+        this.endMute();
+      } else {
+        console.error(`[DubFusion] No synthesis job found for cue ${cue.id}, trying to synthesize now`);
+        // Try to synthesize now as a last resort
+        this.startSynthesis(cue);
+      }
     }
 
     startMute() {
@@ -682,7 +769,9 @@
       this.clearAllTimers();
       
       // Cancel ongoing speech
-      speechSynthesis.cancel();
+      if (this.ttsProvider === 'browser') {
+        speechSynthesis.cancel();
+      }
       
       // Mark playing items as canceled
       let canceledCount = 0;
@@ -706,7 +795,9 @@
       console.log('[DubFusion] Video paused, canceling speech');
       
       // Cancel ongoing speech
-      speechSynthesis.cancel();
+      if (this.ttsProvider === 'browser') {
+        speechSynthesis.cancel();
+      }
       
       // Mark playing items as canceled
       let canceledCount = 0;
@@ -734,11 +825,13 @@
       // Clear existing timers and recompute
       this.clearAllTimers();
       this.state.itemStates.clear();
+      this.synthesisJobs.clear(); // Clear synthesis jobs on rate change
     }
 
     onUrlChange(newVideoId) {
       console.log('[DubFusion] URL changed, stopping scheduler');
       this.stop();
+      this.synthesisJobs.clear();
     }
 
     setConfig(newConfig) {
@@ -758,7 +851,106 @@
       this.stop();
       this.video = null;
       this.provider = null;
+      this.synthesisJobs.clear();
       console.log('[DubFusion] Scheduler disposed');
+    }
+  }
+
+  // Batcher - converts Cues to Batches using join rules
+  class Batcher {
+    constructor() {
+      this.config = {
+        batchJoinGapMs: 400,
+        batchMaxDurationSec: 2.5,
+        batchMaxChars: 140
+      };
+    }
+
+    buildBatches(cues) {
+      if (!cues || cues.length === 0) {
+        return [];
+      }
+
+      console.log(`[DubFusion] Batcher.buildBatches() called with ${cues.length} cues`);
+
+      // Sort cues by start time and dedupe by id
+      const sortedCues = this.sortAndDedupe(cues);
+      
+      if (sortedCues.length === 0) {
+        return [];
+      }
+
+      const batches = [];
+      let currentBatch = null;
+
+      for (const cue of sortedCues) {
+        if (currentBatch === null) {
+          // Start new batch
+          currentBatch = this.createBatchFromCue(cue);
+        } else if (this.canJoinCueToBatch(cue, currentBatch)) {
+          // Join cue to current batch
+          this.joinCueToBatch(cue, currentBatch);
+        } else {
+          // Finalize current batch and start new one
+          batches.push(currentBatch);
+          currentBatch = this.createBatchFromCue(cue);
+        }
+      }
+
+      // Add the last batch if it exists
+      if (currentBatch) {
+        batches.push(currentBatch);
+      }
+
+      console.log(`[DubFusion] Created ${batches.length} batches from ${cues.length} cues`);
+      return batches;
+    }
+
+    sortAndDedupe(cues) {
+      // Sort by start time
+      const sorted = cues.sort((a, b) => a.startSec - b.startSec);
+      
+      // Dedupe by id
+      const seen = new Set();
+      return sorted.filter(cue => {
+        if (seen.has(cue.id)) {
+          return false;
+        }
+        seen.add(cue.id);
+        return true;
+      });
+    }
+
+    createBatchFromCue(cue) {
+      return {
+        startSec: cue.startSec,
+        endSec: cue.endSec,
+        text: cue.text,
+        cueIds: [cue.id]
+      };
+    }
+
+    canJoinCueToBatch(cue, batch) {
+      const gap = cue.startSec - batch.endSec;
+      const joinedDuration = cue.endSec - batch.startSec;
+      const joinedChars = batch.text.length + ' '.length + cue.text.length;
+
+      return gap <= (this.config.batchJoinGapMs / 1000) &&
+             joinedDuration <= this.config.batchMaxDurationSec &&
+             joinedChars <= this.config.batchMaxChars;
+    }
+
+    joinCueToBatch(cue, batch) {
+      batch.endSec = cue.endSec;
+      batch.text = batch.text + ' ' + cue.text;
+      batch.cueIds.push(cue.id);
+      
+      console.log(`[DubFusion] Joined cue ${cue.id} to batch, new text: "${batch.text}"`);
+    }
+
+    setConfig(newConfig) {
+      this.config = { ...this.config, ...newConfig };
+      console.log('[DubFusion] Batcher config updated:', this.config);
     }
   }
 
@@ -945,22 +1137,33 @@
       logger.log('CaptionProvider: initializing for new video');
       await captionProvider.init(video, videoId);
       
+      // Initialize batcher
+      batcher = new Batcher();
+      console.log('[DubFusion] Batcher initialized');
+      
       // Initialize scheduler if we have a manual transcript
-      if (captionProvider.getSourceLabel() === 'manual') {
+      if (captionProvider.getSourceLabel() === 'manual' || true) { // Temporarily enable for testing
         console.log('[DubFusion] Manual transcript detected, initializing scheduler');
+        if (scheduler) scheduler.dispose();
         scheduler = new Scheduler();
         await scheduler.init(video, captionProvider);
         scheduler.start();
         logger.log('Scheduler: initialized and started');
+      } else {
+        // If not manual mode, dispose of any old scheduler
+        if (scheduler) {
+          scheduler.dispose();
+          scheduler = null;
+        }
       }
       
-      updateOverlayHeader();
+      await updateOverlayHeader();
       updateCuesSection();
       
       // Set up a retry mechanism for when tracks load later (only for auto mode)
       let retryCount = 0;
       const maxRetries = 10;
-      const retryInterval = setInterval(() => {
+      const retryInterval = setInterval(async () => {
         if (retryCount >= maxRetries) {
           clearInterval(retryInterval);
           console.log('[DubFusion] Max retries reached for caption provider');
@@ -977,7 +1180,7 @@
           console.log('[DubFusion] TextTracks now available, reinitializing');
           logger.log('CaptionProvider: TextTracks now available, reinitializing');
           captionProvider.init(video, videoId);
-          updateOverlayHeader();
+          await updateOverlayHeader();
           updateCuesSection();
           clearInterval(retryInterval);
         }
@@ -989,12 +1192,23 @@
     }
   }
 
-  // Update overlay header with caption source and scheduler stats
-  function updateOverlayHeader() {
+  // Update overlay header with caption source, TTS provider, and scheduler stats
+  async function updateOverlayHeader() {
     const header = document.querySelector('.df-header');
     if (!header) return;
 
     const source = captionProvider ? captionProvider.getSourceLabel() : '—';
+    
+    // Get TTS provider
+    let ttsProvider = '';
+    try {
+      const { dfTtsProvider: provider } = await chrome.storage.sync.get('dfTtsProvider');
+      if (provider && provider !== 'browser') {
+        ttsProvider = ` • TTS: ${provider}`;
+      }
+    } catch (error) {
+      console.warn('[DubFusion] Failed to get TTS provider:', error);
+    }
     
     // Get scheduler stats if available
     let schedulerStats = '';
@@ -1003,12 +1217,12 @@
       schedulerStats = ` • play:${stats.playCount} skip:${stats.skipCount}`;
     }
     
-    header.innerHTML = `DubFusion • v0 overlay • Source:${source} • Horizon:+0.0s • Ready:+0.0s${schedulerStats}`;
+    header.innerHTML = `DubFusion • v0 overlay • Source:${source} • Horizon:+0.0s • Ready:+0.0s${ttsProvider}${schedulerStats}`;
   }
 
-  // Update cues section with next 3 cues
+  // Update cues section with next 3 cues or batches
   function updateCuesSection() {
-    console.log('[DubFusion] updateCuesSection() called');
+    console.log('[DubFusion] updateCuesSection() called, view mode:', overlayViewMode);
     
     const cuesSection = document.querySelector('.df-cues');
     if (!cuesSection) {
@@ -1018,7 +1232,10 @@
 
     if (!captionProvider) {
       console.log('[DubFusion] No caption provider available');
-      cuesSection.innerHTML = '<div class="cues-none">CUES: (none; enable CC)</div>';
+      const cuesContent = cuesSection.querySelector('.cues-content');
+      if (cuesContent) {
+        cuesContent.innerHTML = '<div class="cues-none">(none; enable CC)</div>';
+      }
       return;
     }
 
@@ -1027,20 +1244,67 @@
     console.log(`[DubFusion] Current video time: ${now}`);
     
     const windowCues = captionProvider.getCuesInWindow(now, now + 30); // Next 30 seconds
-    const nextCues = windowCues.slice(0, 3);
+    console.log(`[DubFusion] Found ${windowCues.length} cues in window`);
 
-    console.log(`[DubFusion] Found ${windowCues.length} cues in window, showing ${nextCues.length}`);
-    logger.log(`updateCuesSection: found ${windowCues.length} cues in window, showing ${nextCues.length}`);
+    // Update toggle buttons to reflect current view mode
+    const toggleBtns = cuesSection.querySelectorAll('.toggle-btn');
+    toggleBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === overlayViewMode);
+    });
 
-    if (source === 'manual' && nextCues.length === 0) {
+    const cuesContent = cuesSection.querySelector('.cues-content');
+    if (!cuesContent) {
+      console.log('[DubFusion] No cues content found');
+      return;
+    }
+
+    if (source === 'manual' && windowCues.length === 0) {
       // Manual mode but no transcript found
       console.log('[DubFusion] Manual source missing for this videoId');
-      cuesSection.innerHTML = '<div class="cues-none">Manual source missing for this videoId</div>';
-    } else if (nextCues.length === 0) {
+      cuesContent.innerHTML = '<div class="cues-none">Manual source missing for this videoId</div>';
+      return;
+    }
+
+    if (windowCues.length === 0) {
       console.log('[DubFusion] No cues to display');
-      cuesSection.innerHTML = '<div class="cues-none">CUES: (none; enable CC)</div>';
+      cuesContent.innerHTML = '<div class="cues-none">(none; enable CC)</div>';
+      return;
+    }
+
+    if (overlayViewMode === 'BATCHES' && batcher) {
+      // Show batches
+      const batches = batcher.buildBatches(windowCues);
+      const nextBatches = batches.slice(0, 3);
+      
+      console.log(`[DubFusion] Created ${batches.length} batches, showing ${nextBatches.length}`);
+      logger.log(`updateCuesSection: created ${batches.length} batches, showing ${nextBatches.length}`);
+
+      if (nextBatches.length === 0) {
+        cuesContent.innerHTML = '<div class="cues-none">(no batches)</div>';
+      } else {
+        const batchesHtml = nextBatches.map(batch => 
+          `<div class="cue-entry">[${batch.startSec.toFixed(1)}→${batch.endSec.toFixed(1)}] ${batch.text}</div>`
+        ).join('');
+        
+        // Add summary for manual transcripts
+        let summaryHtml = '';
+        if (source === 'manual' && captionProvider.strategy && captionProvider.strategy.getSummary) {
+          const summary = captionProvider.strategy.getSummary();
+          if (summary.count > 0) {
+            const firstTime = formatTime(summary.firstTime);
+            const lastTime = formatTime(summary.lastTime);
+            summaryHtml = `<div class="cues-summary">cues:${summary.count} batches:${batches.length} first:${firstTime} last:${lastTime}</div>`;
+          }
+        }
+        
+        cuesContent.innerHTML = `${batchesHtml}${summaryHtml}`;
+      }
     } else {
-      console.log('[DubFusion] Displaying cues:', nextCues);
+      // Show individual cues
+      const nextCues = windowCues.slice(0, 3);
+      console.log(`[DubFusion] Showing ${nextCues.length} cues`);
+      logger.log(`updateCuesSection: showing ${nextCues.length} cues`);
+
       const cuesHtml = nextCues.map(cue => 
         `<div class="cue-entry">[${cue.startSec.toFixed(1)}→${cue.endSec.toFixed(1)}] ${cue.text}</div>`
       ).join('');
@@ -1056,7 +1320,7 @@
         }
       }
       
-      cuesSection.innerHTML = `<div class="cues-label">CUES:</div>${cuesHtml}${summaryHtml}`;
+      cuesContent.innerHTML = `${cuesHtml}${summaryHtml}`;
     }
   }
 
@@ -1107,10 +1371,41 @@
     header.className = 'df-header';
     header.innerHTML = 'DubFusion • v0 overlay • Source:— • Horizon:+0.0s • Ready:+0.0s';
     
-    // Cues section
+    // Cues section with toggle
     const cuesSection = document.createElement('div');
     cuesSection.className = 'df-cues';
-    cuesSection.innerHTML = '<div class="cues-none">CUES: (none; enable CC)</div>';
+    
+    // Create toggle header
+    const cuesHeader = document.createElement('div');
+    cuesHeader.className = 'cues-header';
+    cuesHeader.innerHTML = `
+      <span class="cues-label">CUES:</span>
+      <span class="view-toggle">
+        <span class="toggle-btn active" data-view="BATCHES">BATCHES</span> | 
+        <span class="toggle-btn" data-view="CUES">CUES</span>
+      </span>
+    `;
+    
+    // Add click handlers for toggle
+    cuesHeader.addEventListener('click', (e) => {
+      if (e.target.classList.contains('toggle-btn')) {
+        // Update active state
+        cuesHeader.querySelectorAll('.toggle-btn').forEach(btn => btn.classList.remove('active'));
+        e.target.classList.add('active');
+        
+        // Update view mode
+        overlayViewMode = e.target.dataset.view;
+        updateCuesSection();
+      }
+    });
+    
+    cuesSection.appendChild(cuesHeader);
+    
+    // Add placeholder content
+    const cuesContent = document.createElement('div');
+    cuesContent.className = 'cues-content';
+    cuesContent.innerHTML = '<div class="cues-none">(none; enable CC)</div>';
+    cuesSection.appendChild(cuesContent);
     
     // Log section
     const logContainer = document.createElement('div');
@@ -1237,10 +1532,10 @@
 
   // Set up periodic updates for cues and scheduler stats
   function setupCuesUpdates() {
-    setInterval(() => {
+    setInterval(async () => {
       if (captionProvider && currentVideo) {
         updateCuesSection();
-        updateOverlayHeader(); // Update scheduler stats
+        await updateOverlayHeader(); // Update scheduler stats and TTS provider
       }
     }, 250); // Update every 250ms
   }

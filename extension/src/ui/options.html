@@ -25,6 +25,73 @@
 <body>
   <h1>DubFusion Options</h1>
   
+  <h2>TTS Provider</h2>
+  <label for="ttsProvider">Text-to-Speech Provider</label>
+  <select id="ttsProvider">
+    <option value="browser">Browser TTS (Web Speech API)</option>
+    <option value="elevenlabs">ElevenLabs (Cloud TTS)</option>
+  </select>
+  <div class="help-text">Choose the text-to-speech provider. Browser TTS is free but limited, ElevenLabs offers higher quality voices.</div>
+
+  <div id="elevenlabsSection" style="display: none;">
+    <h2>ElevenLabs Settings</h2>
+    
+    <label for="elevenlabsApiKey">API Key</label>
+    <input id="elevenlabsApiKey" type="password" placeholder="sk_..." />
+    <div class="help-text">Your ElevenLabs API key. Stored securely in local storage.</div>
+    
+    <label for="elevenlabsModelId">Model ID</label>
+    <input id="elevenlabsModelId" type="text" placeholder="eleven_multilingual_v2" value="eleven_multilingual_v2" />
+    <div class="help-text">ElevenLabs model to use for text-to-speech.</div>
+    
+    <label for="elevenlabsVoiceId">Voice ID</label>
+    <input id="elevenlabsVoiceId" type="text" placeholder="21m00Tcm4TlvDq8ikWAM" />
+    <div class="help-text">Voice ID for the selected voice. Use "List Voices" to find available voices.</div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;">
+      <div>
+        <label for="elevenlabsStability">Stability</label>
+        <input id="elevenlabsStability" type="range" min="0" max="1" step="0.01" value="0.5" />
+        <span id="stabilityValue">0.5</span>
+        <div class="help-text">Voice stability (0-1). Higher values = more consistent.</div>
+      </div>
+      
+      <div>
+        <label for="elevenlabsSimilarityBoost">Similarity Boost</label>
+        <input id="elevenlabsSimilarityBoost" type="range" min="0" max="1" step="0.01" value="0.75" />
+        <span id="similarityBoostValue">0.75</span>
+        <div class="help-text">Similarity to original voice (0-1). Higher values = more similar.</div>
+      </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;">
+      <div>
+        <label for="elevenlabsStyle">Style (Optional)</label>
+        <input id="elevenlabsStyle" type="range" min="0" max="1" step="0.01" value="0" />
+        <span id="styleValue">0</span>
+        <div class="help-text">Style strength (0-1). Only for models that support it.</div>
+      </div>
+      
+      <div>
+        <label for="elevenlabsUseSpeakerBoost">Use Speaker Boost</label>
+        <input id="elevenlabsUseSpeakerBoost" type="checkbox" />
+        <div class="help-text">Enable speaker boost for enhanced clarity.</div>
+      </div>
+    </div>
+    
+    <div class="actions">
+      <button id="listVoices">List Voices</button>
+      <button id="testElevenLabs">🔊 Test ElevenLabs</button>
+      <button id="debugStorage" style="background-color: #6c757d;">Debug Storage</button>
+      <span id="elevenlabsStatus"></span>
+    </div>
+    
+    <div id="voicesList" style="display: none; margin-top: 16px;">
+      <h3>Available Voices</h3>
+      <div id="voicesListContent" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 8px; border-radius: 4px;"></div>
+    </div>
+  </div>
+
   <h2>Transcript Mode</h2>
   <label for="transcriptMode">Source</label>
   <select id="transcriptMode">
