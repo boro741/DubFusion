@@ -1,0 +1,29 @@
+---
+description: rules for building dubfusion chrome extension (mv3); enforce folder structure, place all docs in docs/, all extension code in extension/, and follow official chrome extension docs.
+alwaysApply: false
+---
+# dubfusion project rules (mv3 chrome extension)
+
+## folder placement
+- All documentation → `docs/`
+- All extension code/assets → `extension/`
+- No new top-level files except: `README.md`, `.gitignore`, `LICENSE`
+
+## extension structure
+- `extension/manifest.json` = Manifest V3 config
+- `extension/src/background.js` = service worker
+- `extension/src/content/` = content scripts + CSS
+- `extension/src/ui/` = popup + options pages
+- `extension/src/offscreen/` = offscreen doc
+- `extension/assets/` = icons + styles
+
+## coding rules
+- Follow **official Chrome Extensions docs** for MV3 APIs
+- Use minimal permissions; justify new ones in `docs/adr/*`
+- Store secrets (API keys) only in `chrome.storage.local`, handled by `background.js`
+- Do not expose secrets to content scripts
+
+## documentation rules
+- Update `docs/changelog.md` for every change
+- Keep `docs/architecture.md` aligned with file structure
+- Record major decisions in `docs/adr/ADR-xxxx-title.md`
