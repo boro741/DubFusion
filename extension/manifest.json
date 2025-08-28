@@ -3,7 +3,7 @@
   "name": "DubFusion",
   "version": "0.0.1",
   "description": "Hello World scaffold for DubFusion (MV3).",
-  "permissions": ["storage", "scripting", "activeTab", "offscreen"],
+  "permissions": ["storage", "scripting", "activeTab", "offscreen", "tabs"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://music.youtube.com/*"
